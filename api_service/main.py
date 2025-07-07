@@ -13,11 +13,13 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     await wait_for_rabbitmq_connection()
 
-    await broker.start()
-    logging.info("Starting broker...")
-    yield
-    logging.info("Shutting down broker...")
-    await broker.close()
+    try:
+        await broker.start()
+        logging.info("Starting broker...")
+        yield
+    finally:
+        logging.info("Shutting down broker...")
+        await broker.close()
 
 
 app = FastAPI(lifespan=lifespan)
