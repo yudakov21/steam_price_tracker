@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import sys
+import json
 
 from config import BOT_TOKEN
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, filters
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from faststream.rabbit import RabbitBroker
@@ -15,33 +16,37 @@ broker = RabbitBroker("amqp://guest:guest@rabbitmq/")
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
-ITEMS = [
-    "P250 | Verdigris (Battle-Scarred)",
-    "Chroma 3 Case",
-    "Gamma Case",
-    "Operation Breakout Weapon Case"
-]
+def load_items_from_json(filename: str) -> list[str]:
+    with open(filename, 'r') as file:
+        data = json.load(file)
+    return data
 
+ITEMS = load_items_from_json("items.json")
+
+
+@dp.message(filters.Command("start"))
+async def start_handler(msg: types.Message):
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard=[[types.KeyboardButton(text=item)] for item in ITEMS],
+        resize_keyboard=True
+    )
+
+    await msg.answer("Select or type an item to check the discount:", reply_markup=keyboard)
 
 @dp.message()
-async def start_handler(msg: types.Message):
-    keyboard = types.InlineKeyboardMarkup(
-        inline_keyboard=[[types.InlineKeyboardButton(text=item, callback_data=item)] for item in ITEMS]
-    )
-    await msg.answer("Select an item to check the discount:", reply_markup=keyboard)
-
-
-@dp.callback_query()
-async def callback_handler(callback: types.CallbackQuery):
-    item = callback.data
-    await callback.answer(f"Check discount on: {item}")
+async def text_handler(msg: types.Message):
+    item = msg.text.strip()
+    temp_msg = await msg.answer(f"Check discount on: {item}")
 
     request_data = PriceRequest(
-        chat_id=callback.from_user.id, 
+        chat_id=msg.from_user.id,
         item_name=item
     )
-
     await broker.publish(request_data, "price_request")
+
+    await asyncio.sleep(1.5)
+
+    await temp_msg.delete()
 
 
 @broker.subscriber("price_response")
@@ -77,7 +82,7 @@ async def main() -> None:
             async with broker:
                 await broker.start()
                 await dp.start_polling(bot)
-            break
+            return
         except Exception as e:
             logging.warning(f"RabbitMQ connection error: {e}")
             await asyncio.sleep(3)
