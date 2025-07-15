@@ -66,10 +66,10 @@ async def wait_for_rabbitmq_connection(max_attempts=30):
             reader, writer = await asyncio.open_connection("rabbitmq", 5672)
             writer.close()
             await writer.wait_closed()
-            print("RabbitMQ is available!!!")
+            logging.info("RabbitMQ is available!!!")
             return
         except Exception as e:
-            print(f"[{i}/{max_attempts}] Waiting for RabbitMQ...")
+            logging.info(f"[{i}/{max_attempts}] Waiting for RabbitMQ...")
             await asyncio.sleep(1)
     raise RuntimeError("Failed to connect to RabbitMQ :(")
 
