@@ -5,10 +5,16 @@ import json
 
 from config import BOT_TOKEN
 from aiogram import Bot, Dispatcher, types, filters
+from aiogram.fsm.context import FSMContext
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from faststream.rabbit import RabbitBroker
 from schemas.schema import PriceRequest, PriceResponse
+
+
+BACK_BTN = "🔙 Back to Items"
+DIS_BTN = "📉 Notify on Discount"
+INC_BTN = "📈 Notify on Price Increase"
 
 
 dp = Dispatcher()
@@ -33,29 +39,59 @@ async def start_handler(msg: types.Message):
 
     await msg.answer("Select or type an item to check the discount:", reply_markup=keyboard)
 
-@dp.message()
-async def text_handler(msg: types.Message):
-    item = msg.text.strip()
-    temp_msg = await msg.answer(f"Check discount on: {item}")
+@dp.message(lambda msg: msg.text == BACK_BTN)
+async def go_back_handler(msg: types.Message, state: FSMContext):
+    await state.clear()
+    await start_handler(msg)
+
+@dp.message(lambda msg: msg.text not in [DIS_BTN, INC_BTN])
+async def item_choice_handler(msg: types.Message, state: FSMContext):
+    await state.set_data({"item_name": msg.text.strip()})
+
+    keyboard = types.ReplyKeyboardMarkup(
+        keyboard= [
+            [types.KeyboardButton(text=DIS_BTN)],
+            [types.KeyboardButton(text=INC_BTN)],
+            [types.KeyboardButton(text=BACK_BTN)],
+        ],
+        resize_keyboard=True
+    )
+
+    await msg.answer("Do you want to check for a discount or a price increase?", reply_markup=keyboard)
+
+@dp.message(lambda msg: msg.text in [DIS_BTN, INC_BTN])
+async def target_choice_handler(msg: types.Message, state: FSMContext):
+    data = await state.get_data()
+    item = data["item_name"]
+    goal = "discount" if "Discount" in msg.text else "increase"
+
+    temp_msg = await msg.answer(f"Check {goal.upper()} on: {item}")
 
     request_data = PriceRequest(
         chat_id=msg.from_user.id,
-        item_name=item
+        item_name=item,
+        check_type=goal
     )
+
     await broker.publish(request_data, "price_request")
-
     await asyncio.sleep(1.5)
-
     await temp_msg.delete()
 
 
 @broker.subscriber("price_response")
 async def handle_response(response: PriceResponse):
+    if response.discount is True:
+        note = "🎯 <b>There is a discount!</b>"
+    elif response.discount is True:
+        note = "📈 <b>Price has increased more than 5%!</b>"
+    else:
+        note = "💤 No significant change."
+
     message = (
         f"<b>{response.item_name}</b>\n\n"
         f"💵 Current price: <b>${response.current_price:.2f}</b>\n"
         f"📊 Average price: <b>${response.average_price:.2f}</b>\n\n"
-        f"{'🎯 <b>There is a discount!</b>' if response.discount else '💤 No discount.'}"
+        f"{note}"
     )
     await bot.send_message(response.chat_id, message, parse_mode="HTML")
 

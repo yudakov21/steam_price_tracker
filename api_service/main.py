@@ -50,22 +50,28 @@ async def handle_request(req: PriceRequest):
     async with aiohttp.ClientSession() as session:
         async with session.get(url=url) as response:
             steam_data = await response.json()
-    
+
+    discount = None
+    increase = None
+
     if steam_data.get("success") and steam_data.get("lowest_price"):
         current = float(steam_data["lowest_price"].replace("$", "").replace(",", "."))
         average = float(steam_data["median_price"].replace("$", "").replace(",", "."))
 
-        discount = current < average * 0.95
+        if req.check_type == "discount":
+            discount = current < average * 0.95
+        elif req.check_type == "increase":
+            increase = current > average * 1.05
     else:
         current = average = 0.0
-        discount = None
 
     response_data = PriceResponse(
         chat_id=req.chat_id,
         item_name=req.item_name,
         current_price=current,
         average_price=average,
-        discount=discount
+        discount=discount,
+        increase=increase
     )
 
     # 'publish' send response_data to the specified queue
