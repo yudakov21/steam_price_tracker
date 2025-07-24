@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from faststream.rabbit import RabbitBroker
 from schemas.schema import PriceRequest, PriceResponse
 from contextlib import asynccontextmanager
+from typing import Protocol
 
 
 @asynccontextmanager
@@ -40,30 +41,36 @@ async def wait_for_rabbitmq_connection(max_attempts=30):
     raise RuntimeError("Failed to connect to RabbitMQ :(")
 
 
-# Broker signs up for the line/queue price_request
-@broker.subscriber("price_request")
-async def handle_request(req: PriceRequest):
-    # !!!
-    encoded_name = urllib.parse.quote(req.item_name)
-    url = f"https://steamcommunity.com/market/priceoverview/?appid=730&market_hash_name={encoded_name}&currency=1"
+class PriceClient(Protocol):
+    async def get_steam_prices(self, item_name: str) -> tuple[float, float]:
+        ...
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url=url) as response:
+class SteamMarketClient:
+    def __init__(self, session: aiohttp.ClientSession):
+        self.session = session
+
+    async def get_steam_prices(self, item_name: str) -> tuple[float, float]:
+        encoded_name = urllib.parse.quote(item_name)
+        url = f"https://steamcommunity.com/market/priceoverview/?appid=730&market_hash_name={encoded_name}&currency=1"
+
+        async with self.session.get(url=url) as response:
             steam_data = await response.json()
+        
+        if steam_data.get("success") and steam_data.get("lowest_price"):
+            current = float(steam_data["lowest_price"].replace("$", "").replace(",", "."))
+            average = float(steam_data["median_price"].replace("$", "").replace(",", "."))
+        else:
+            current = average = 0.0
 
-    discount = None
-    increase = None
+        return current, average
 
-    if steam_data.get("success") and steam_data.get("lowest_price"):
-        current = float(steam_data["lowest_price"].replace("$", "").replace(",", "."))
-        average = float(steam_data["median_price"].replace("$", "").replace(",", "."))
 
-        if req.check_type == "discount":
-            discount = current < average * 0.95
-        elif req.check_type == "increase":
-            increase = current > average * 1.05
-    else:
-        current = average = 0.0
+async def handle_request(req: PriceRequest, client: PriceClient):
+    current, average = await client.get_steam_prices(req.item_name)
+
+    discount = current < average * 0.95 if req.check_type == "discount" else None      
+    increase = current > average * 1.05 if req.check_type == "increase" else None
+            
 
     response_data = PriceResponse(
         chat_id=req.chat_id,
@@ -77,3 +84,10 @@ async def handle_request(req: PriceRequest):
     # 'publish' send response_data to the specified queue
     # price_response is a queue / routing key
     await broker.publish(response_data, "price_response")   
+
+
+@broker.subscriber("price_request")
+async def broker_handler(req: PriceRequest):
+    async with aiohttp.ClientSession() as session:
+        steam_client = SteamMarketClient(session)
+        await handle_request(req, steam_client)
