@@ -82,7 +82,7 @@ async def target_choice_handler(msg: types.Message, state: FSMContext):
 async def handle_response(response: PriceResponse):
     if response.discount is True:
         note = "🎯 <b>There is a discount!</b>"
-    elif response.discount is True:
+    elif response.increase is True:
         note = "📈 <b>Price has increased more than 5%!</b>"
     else:
         note = "💤 No significant change."
